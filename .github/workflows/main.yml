@@ -6,7 +6,7 @@ on:
       api:
         description: Android API level
         required: false
-        default: '35'
+        default: '36'
         type: string
 
 jobs:
@@ -103,8 +103,7 @@ jobs:
           rm -f "$OUTPUT_DIR"/*.tar.gz
           
             make TARGET=tegu-CP2A.260705.006
-
-                  # Upload build output
+      
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
