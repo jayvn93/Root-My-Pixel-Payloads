@@ -1,0 +1,130 @@
+name: Build Exploit - All Targets
+
+on:
+  workflow_dispatch:
+    inputs:
+      api:
+        description: Android API level
+        required: false
+        default: '35'
+        type: string
+
+jobs:
+  build-all-targets:
+    runs-on: ubuntu-latest
+
+    env:
+      NDK_VERSION: android-ndk-r29
+      EXPLOIT_DIR: 
+      OUTPUT_DIR: ${{ github.workspace }}/target-archives
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wget unzip tar gzip
+
+      - name: Setup Android NDK r29
+        shell: bash
+        env:
+          API: ${{ inputs.api || '36' }}
+        run: |
+          set -euxo pipefail
+
+          NDK_CACHE="$HOME/android-ndk-cache"
+          mkdir -p "$NDK_CACHE"
+
+          find_clang() {
+            find "$NDK_CACHE" \
+              -path '*/toolchains/llvm/prebuilt/*/bin/clang' \
+              -print -quit
+          }
+
+          CLANG_PATH="$(find_clang)"
+
+          if [[ -z "$CLANG_PATH" ]]; then
+            cd "$NDK_CACHE"
+
+            rm -rf "$NDK_VERSION" "${NDK_VERSION}-linux.zip"
+
+            wget -q \
+              "https://dl.google.com/android/repository/${NDK_VERSION}-linux.zip" \
+              -O "${NDK_VERSION}-linux.zip"
+
+            unzip -q "${NDK_VERSION}-linux.zip"
+            rm -f "${NDK_VERSION}-linux.zip"
+
+            CLANG_PATH="$(find_clang)"
+          fi
+
+          if [[ -z "$CLANG_PATH" || ! -x "$CLANG_PATH" ]]; then
+            echo 'NDK clang executable was not found after extraction' >&2
+            find "$NDK_CACHE" -maxdepth 8 \
+              \( -type f -o -type l \) \
+              -path '*/toolchains/llvm/prebuilt/*/bin/clang*' \
+              -print >&2
+            exit 1
+          fi
+
+          TOOLCHAIN_BIN="$(dirname "$CLANG_PATH")"
+          NDK_ROOT="${CLANG_PATH%%/toolchains/llvm/prebuilt/*}"
+
+          CC_WRAPPER="$RUNNER_TEMP/aarch64-linux-android-clang"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            "exec \"$CLANG_PATH\" --target=\"aarch64-linux-android$API\" \"\$@\"" \
+            > "$CC_WRAPPER"
+          chmod +x "$CC_WRAPPER"
+          CC_COMMAND="$CC_WRAPPER"
+
+          echo "ANDROID_NDK_HOME=$NDK_ROOT" >> "$GITHUB_ENV"
+          echo "NDK_ROOT=$NDK_ROOT" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN_BIN=$TOOLCHAIN_BIN" >> "$GITHUB_ENV"
+          echo "CC_COMMAND=$CC_COMMAND" >> "$GITHUB_ENV"
+
+          echo "NDK_ROOT=$NDK_ROOT"
+          echo "CLANG_PATH=$CLANG_PATH"
+          echo "CC_COMMAND=$CC_COMMAND"
+          "$CLANG_PATH" --target="aarch64-linux-android$API" --version
+
+      - name: Build and archive all targets
+        shell: bash
+        working-directory: ${{ env.EXPLOIT_DIR }}
+        env:
+          API: ${{ inputs.api || '36' }}
+        run: |
+          set -euxo pipefailu
+
+          mkdir -p "$OUTPUT_DIR"
+          rm -f "$OUTPUT_DIR"/*.tar.gz
+          
+            make TARGET=tegu-CP2A.260705.006
+
+                  # Upload build output
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: build/tegu-CP2A.260705.006/
+          # Keep for 7 days (default is 90)
+          retention-days: 7
+
+      - name: Create build summary
+        shell: bash
+        run: |
+          {
+            echo '## Build completed'
+            echo
+            echo "- API level: ${{ inputs.api || '36' }}"
+            echo "- Target archives: $(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.tar.gz' | wc -l)"
+            echo '- Artifact: `exploit-all-targets-api-${{ inputs.api || '36' }}`'
+            echo '- Combined archive: `exploit-all-targets.tar.gz`'
+            echo
+            echo 'Each target archive contains:'
+            echo '- `preload.so`'
+            echo '- `SHA256SUMS`'
+          } >> "$GITHUB_STEP_SUMMARY"
